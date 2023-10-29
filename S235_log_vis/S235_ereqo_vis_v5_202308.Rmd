@@ -1,0 +1,1207 @@
+---
+title: "S235_ereqo_vis_v5_202308"
+author: "fk506.cni"
+date: "2023-08-30"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(tidyverse)
+require(openxlsx)
+require(data.table)
+require(lubridate)
+require(ggpubr)
+# require(gdtools)
+# require(rvg)
+```
+
+
+## functions
+```{r}
+require(officer)
+require(rvg)
+outputdir <- "./figs/"
+if(!dir.exists(outputdir)){
+  dir.create(outputdir)
+}
+
+ggsave2_tri <- function(plot, wid = 9, hei=9){
+  plot_name <- deparse(substitute(plot))
+  
+  #png
+  file_name <- paste(outputdir,plot_name, ".png", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "png",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  
+  #pdf
+  file_name <- paste(outputdir,plot_name, ".pdf", sep = "",collapse = "")
+  ggsave(filename = file_name,plot = plot,device = "pdf",width = wid, height = hei,dpi = 300,units = "cm")
+  
+  #pptx
+  file_name <- paste(outputdir,plot_name, ".pptx", sep = "",collapse = "")
+  plot_ed <- rvg::dml(ggobj = plot,width = wid, height = hei)
+  
+  doc <- read_pptx() %>%
+    add_slide('Title and Content', 'Office Theme') %>%
+    ph_with(value = "", location = ph_location_type(type = "title")) %>%
+    ph_with(value = plot_ed, location = ph_location(type = "body",width = cm2inch(wid), height = cm2inch(hei),left = 2, top = 2))
+  doc %>%
+    print(target = file_name)
+  
+}
+
+
+
+inch2cm <- function(x){
+  return(x/0.39370)
+}
+cm2inch <- function(x){
+  return(0.39370*x)
+}
+
+p2cm <- function(x){
+  return(as.integer(0.008466666666666667 * x))
+}
+
+cm2p <- function(x){
+  return(as.integer(118.11023622047244 *x))
+}
+
+sv2ggkm <- function(svfit){
+  p <- ggsurvplot(fit = svfit, data = df,
+                risk.table.title = "risk.table.title", risk.table.y.text.col = TRUE,
+           risk.table.y.text = FALSE, fontsize = 5,
+           risk.table = TRUE, tables.theme = theme_pubr(), ggtheme = theme_pubr())
+  p_km <- p$plot
+  p_tb <- p$table
+  p2 <- cowplot::plot_grid(p_km, p_tb, ncol = 1,align = "v", rel_heights = c(3,1))
+  grid::grid.draw(p2)
+  return(p2)
+}
+```
+
+
+```{r}
+d_log <- "../dat/eReQoデータ・ログ_20220801/"
+d_ptman <- "../dat/eReQoデータ・ログ_20220801/操作ログ/"
+
+```
+
+```{r}
+f_usr <- "../dat/eReQoデータ・ログ_20220801/患者データ/USER_20220801.csv"
+
+hospitals <- c("京都大学医学部附属病院", "千葉県がんセンター", "福井大学医学部附属病院")
+
+df_case <- fread(f_usr,encoding = "UTF-8")  %>%
+  dplyr::filter(施設名称 %in%  hospitals)  %>%
+  mutate(is_kuhp = 施設名称 == "京都大学医学部附属病院") %>%
+  mutate(pt_id = str_remove(COID, "269900042")) %>%
+  mutate(is_pt1 = !str_detect(pt_id, "^000000")) %>%
+  mutate(is_pt2 = (!is_kuhp) | str_length(pt_id) == 8) %>%
+  mutate(is_pt = is_pt1 & is_pt2) %>%
+  mutate(dttime = ymd_hms(登録日時)) %>%
+  mutate(dt = lubridate::date(dttime)) %>%
+  mutate(dt_end = lubridate::ymd("2022-8-01")) %>%
+  mutate(span_in_study = dt_end - dt) %>%
+  dplyr::filter(is_pt)
+  # mutate(usr = ePROID)
+
+# df_case %>%
+#   DT::datatable(filter = "top")
+
+dt_study_start <- df_case$dttime %>%
+  min()
+print(dt_study_start)
+require(openxlsx)
+write.xlsx(df_case, "./figs/tmp_caselist.xlsx", overwrite = T)
+```
+
+
+```{r}
+f2df <- function(f){
+  f %>%
+    fread(., encoding = "UTF-8") %>%
+    dplyr::filter(ePROID %in% df_case$ePROID) %>%
+    return()
+}
+
+
+f_ct <- "../dat/eReQoデータ・ログ_20220801/症例データ/PRO-CTCAE_20220801123632.csv"
+
+df_ct <- f_ct %>%
+  f2df()
+
+# DT::datatable(df_ct)
+
+f_q1 <- "../dat/eReQoデータ・ログ_20220801/症例データ/QOL1_20220801123632.csv"
+df_q1 <- f_q1 %>%
+  f2df()
+
+f_q2 <- "../dat/eReQoデータ・ログ_20220801/症例データ/QOL2_20220801123632.csv"
+
+df_q2 <- f_q2 %>%
+  f2df()
+
+
+lvlinc <- c("Fam","QOL2", "QOL1","CTCAE", "HCP", "Vis/Adm")
+```
+
+# 重いので一旦出力保存
+
+```{r}
+d_bat <- "../dat/eReQoデータ・ログ_20220801/バッチログ/"
+
+
+fs_bat <-  list.files(d_bat, recursive = T, full.names = T)
+
+df_bat <- data.frame()
+l_df <- list()
+for(f in fs_bat){
+  # 重いので一旦出力保存
+  # print(f)
+  # df_f <- fread(f,header = F, sep = "", encoding = "UTF-8") %>%
+  #   mutate(ind_in_f = 1:nrow(.))
+  # df_bat <- bind_rows(df_bat, df_f)
+
+}
+
+
+# saveRDS(df_bat, file = "./dat/df_bat.obj")
+# rm(df_bat)
+df_bat <- readRDS(file = "./dat/df_bat.obj")
+
+df_bat <-  df_bat %>%
+  mutate(dt = str_sub(V1, 1, 23) %>%
+           ymd_hms())  %>%
+    dplyr::filter(!is.na(dt)) %>%
+  mutate(log = str_sub(V1, 25, -1)) %>%
+  filter(log != "APPL_ID=2(PATH_NAME=ereqo)のバッチデーモンを開始しました") %>%
+  mutate(ses = str_sub(V1, 25, 25+11),
+         proc = str_sub(V1, 25+11+2, -1)) %>%
+  dplyr::select(-V1)
+
+
+
+# rm(df_bat)
+# df_bat$V1 <- NULL
+
+df_bat_query <- df_bat %>%
+  dplyr::filter(str_detect(proc, "催促バッチ")) 
+
+df_bat_query <- df_bat_query %>%
+  mutate(group_proc = proc %>%
+           str_remove("【START】バッチ処理 ") %>%
+           str_extract("[A-Z1-9]*")) %>%
+  dplyr::select(ses, group_proc)
+
+
+df_bat_qsub <- df_bat %>%
+  dplyr::filter(ses %in% df_bat_query$ses)%>%
+  dplyr::left_join(df_bat_query, by = "ses") %>%
+  dplyr::filter(str_detect(proc, "【INFO】coid")) %>%
+  mutate(COID = str_remove(proc, "【INFO】coid : ")) %>%
+  mutate(dt_alart = lubridate::date(dt)) %>%
+  dplyr::filter(COID %in% df_case$COID) %>%
+  dplyr::left_join(df_case, by="COID") %>%
+  mutate(alart_dt_from_start = dt_alart - dt.y) %>%
+  mutate(alart_dt_from_start_num = as.numeric(alart_dt_from_start)) 
+
+df_bat_qsub <- df_bat_qsub %>%
+  mutate(group_proc = factor(group_proc, levels = lvlinc, ordered = T))
+
+# View(df_bat_qsub)
+# df_bat_qsub$alart_dt_from_start_num
+# summary(df_bat_qsub)
+```
+
+研究期間中のアラート数
+```{r}
+max_study_date <- 84
+
+df_bat_qsub_in85_smr <- df_bat_qsub %>%
+  mutate(calc_span = pmin(span_in_study, max_study_date)) %>%
+  dplyr::filter(alart_dt_from_start_num <= max_study_date) %>%
+  dplyr::group_by(ePROID) %>%
+  summarise(n=n(), cs= unique(calc_span), ncalc = length(unique(calc_span))) %>%
+  mutate(alart_per_w = 7*n/(cs))
+```
+
+
+```{r}
+# rm(df_bat)
+```
+
+
+```{r}
+# require(ggprism)
+max_inputdate <- df_case$span_in_study %>%
+  max() %>%
+  as.integer()
+max_inputdate
+
+```
+
+```{r}
+f_c <- "../dat/eReQoデータ・ログ_20220801/症例データ/PRO-CTCAE_20220801123632.csv"
+df_c <- fread(f_c, sep=",", encoding = "UTF-8") %>%
+  dplyr::filter(ePROID %in% df_case$ePROID) %>%
+  dplyr::select(-施設番号, -施設名称) %>%
+  dplyr::select(最終保存日時, everything()) %>%
+  dplyr::rename(final_input = 最終保存日時,
+                dt_of_Clndr = カレンダ日付) %>%
+  dplyr::select(-final_input, -COID)
+
+dt_c <- df_c %>%
+  tidyr::gather(key = labels, value = vals,-dt_of_Clndr, -ePROID) %>%
+  # dplyr::filter(!is.na(vals))%>%
+  mutate(group_proc = "CTCAE") 
+# NAのCTCAEどうするか
+# %>%
+#   dplyr::filter(!is.na(vals))
+
+
+f_q1 <-  "../dat/eReQoデータ・ログ_20220801/症例データ/QOL1_20220801123632.csv"
+f_q2 <-  "../dat/eReQoデータ・ログ_20220801/症例データ/QOL2_20220801123632.csv"
+df_q1 <- fread(f_q1, sep=",", encoding = "UTF-8") 
+df_q2 <- fread(f_q2, sep=",", encoding = "UTF-8") 
+
+
+dt_q1 <- df_q1 %>%
+  dplyr::filter(ePROID %in% df_case$ePROID) %>%
+  dplyr::select(-施設番号, -施設名称) %>%
+  dplyr::select(最終保存日時, everything()) %>%
+  dplyr::rename(final_input = 最終保存日時,
+                dt_of_Clndr = カレンダ日付) %>%
+  dplyr::select(-final_input, -COID, -一次保存日時, -固定保存日時, -固定修正日時, -自動固定日時, -状態) %>%
+    tidyr::gather(key = labels, value = vals,-dt_of_Clndr, -ePROID) %>%
+  dplyr::filter(!is.na(vals)) %>%
+  mutate(group_proc = "QOL1")
+
+# df_c
+
+dt_q2 <- df_q2 %>%
+  dplyr::filter(ePROID %in% df_case$ePROID) %>%
+  dplyr::select(-施設番号, -施設名称) %>%
+  dplyr::select(最終保存日時, everything()) %>%
+  dplyr::rename(final_input = 最終保存日時,
+                dt_of_Clndr = カレンダ日付) %>%
+  dplyr::select(-final_input, -COID) %>%
+    tidyr::gather(key = labels, value = vals,-dt_of_Clndr, -ePROID) %>%
+  dplyr::filter(!is.na(vals)) %>%
+    mutate(group_proc = "QOL2")
+
+
+# dt_q1
+# View(dt_c)
+# View(df_q1)
+```
+
+
+```{r}
+d_trs <- "../dat/eReQoデータ・ログ_20220801/操作ログ/"
+
+f_id_pair <- "../dat/dump_client_users_20220928_165024.csv"
+
+
+fs_trs <-  list.files(d_trs, recursive = T, full.names = T)
+
+# df_trs <- data.frame()
+# for(f in fs_trs){
+#   # 重いので一旦出力保存
+#   print(f)
+#   df_f <- fread(f,header = F, sep = ",", encoding = "UTF-8",colClasses = 'character') %>%
+#     as.data.frame() %>%
+#     mutate(ind_in_f = 1:nrow(.))
+#   df_trs <- bind_rows(df_trs, df_f)
+# 
+# }
+# 
+# saveRDS(object = df_trs, "./dat/df_trs.obj")
+# rm(df_trs)
+df_trs <- readRDS( "./dat/df_trs.obj")
+
+# warnings()
+
+
+
+df_trs <- df_trs %>%
+  `colnames<-`(c("dt_act", "usr","type","view","action","keydate","reqID","sesID","ind_in_f"))%>%
+  dplyr::filter(dt_act != "日時")
+
+df_fam <- df_trs %>%
+  dplyr::filter(str_detect(usr, " ")) %>%
+  mutate(ePROID = str_extract(usr, "^C[0-9]*")) %>%
+  dplyr::filter(ePROID %in% df_case$ePROID) %>%
+  dplyr::left_join(df_case, by="ePROID") %>%
+  mutate(dt_act_hms = lubridate::ymd_hms(dt_act)) %>%
+  mutate(dt_act = lubridate::ymd_hms(dt_act) %>%
+           lubridate::date()) %>%
+  mutate(dt_from_start = dt_act - dt) %>%
+  dplyr::select(dt_act_hms, dt_act, everything())
+
+df_fam <- df_fam %>%
+  mutate(alart_dt_from_start= dt_act_hms -dttime) %>%
+  dplyr::select(alart_dt_from_start, everything()) %>%
+  mutate(group_proc = "Fam") %>%
+  dplyr::select(alart_dt_from_start, ePROID,group_proc) %>%
+  dplyr::distinct()
+  # %>%
+#   mutate(alart_dt_from_start = alart_dt_from_start %>%
+#            lubridate::Date()) 
+
+# df_fam$alart_dt_from_start %>%
+#   class()
+  # lubridate::as_date()
+
+df_pair <- fread(f_id_pair) %>%
+  dplyr::filter(LOGIN_ID %in% df_case$ePROID)
+
+
+
+```
+
+
+
+```{r}
+require(ggpubr)
+dt3 <- bind_rows(dt_c, dt_q1, dt_q2) %>%
+  dplyr::select(-labels, -vals) %>%
+  dplyr::distinct() %>%
+  dplyr::mutate(dt_of_Clndr = lubridate::date(dt_of_Clndr)) %>%
+  dplyr::left_join(df_case, by="ePROID") %>%
+  mutate(alart_dt_from_start = dt_of_Clndr - dt) %>%
+  dplyr::select(group_proc, alart_dt_from_start, ePROID) %>%
+  mutate(alart_dt_from_start_num = as.numeric(alart_dt_from_start, "days")) %>%
+  mutate(group_proc = factor(group_proc, levels = lvlinc, ordered = T)) %>%
+  dplyr::arrange(group_proc) %>%
+  mutate(group_proc_n = group_proc %>%
+           as.numeric())
+
+
+dt3_smr <- dt3 %>%
+  full_join(df_case, by="ePROID") %>%
+  mutate(calc_span = pmin(span_in_study, max_study_date) %>%
+           as.numeric("days")) %>%
+  mutate(ePROID = factor(ePROID)) %>%
+  group_by(ePROID, .drop = FALSE) %>%
+  dplyr::filter(alart_dt_from_start <= calc_span) %>%
+  summarise(n_input=n()) %>%
+  mutate(ePROID = as.character(ePROID)) %>%
+  left_join(df_bat_qsub_in85_smr, by= "ePROID")  %>%
+  mutate(input_per_w = 7*n_input/(cs)) %>%
+  dplyr::select(ePROID, n_input, cs, input_per_w,alart_per_w) %>%
+  mutate(pt_class = case_when(
+    input_per_w <= 5 & alart_per_w <= 5 ~ "light_user",
+    5 < input_per_w & alart_per_w <= 5 ~ "heavy_user",
+    5 < input_per_w  & 5 < alart_per_w  ~ "responder",
+    input_per_w <= 5 & 5 < alart_per_w  ~ "low_responder",
+    T ~ "other"
+  )) %>%
+  mutate(pt_class_f = factor(pt_class, levels = c("other", "low_responder", "responder","heavy_user","light_user")))
+
+
+dt3 <- dt3 %>%
+  dplyr::left_join(dt3_smr, by = "ePROID")
+
+df_bat_qsub <- df_bat_qsub %>%
+  dplyr::left_join(dt3_smr, by = "ePROID")
+
+dt_fam <- df_fam %>%
+  mutate(alart_dt_from_start_num = as.numeric(alart_dt_from_start, "days")) %>%
+  mutate(group_proc = factor(group_proc, levels = lvlinc, ordered = T)) %>%
+  dplyr::arrange(group_proc) %>%
+  mutate(group_proc_n = group_proc %>%
+           as.numeric())  %>%
+  dplyr::left_join(dt3_smr, by = "ePROID")
+
+
+
+
+
+# dt3 %>%
+#   summary()
+
+
+df_bat_qsub <- df_bat_qsub %>%
+  dplyr::arrange(group_proc) %>%
+  mutate(group_proc_n = group_proc %>%
+           as.numeric())
+
+# df_bat_qsub$group_proc
+# # dt3$group_proc
+
+
+# saveRDS(dt3_smr, "./dat/dt3_smr.rds")
+```
+
+
+```{r}
+d_sys <- "../dat/eReQoデータ・ログ_20220801/システムログ/"
+
+fs_sys <-  list.files(d_sys, recursive = T, full.names = T)
+
+df_sys <- data.frame()
+# l_df <- list()
+for(f in fs_sys){
+  # 重いので一旦出力保存
+  # print(f)
+  # df_f <- fread(f,header = F, sep = "", encoding = "UTF-8") %>%
+  #   mutate(ind_in_f = 1:nrow(.))
+  # df_sys <- bind_rows(df_sys, df_f)
+
+}
+
+
+# saveRDS(df_sys, file = "./dat/df_sys.obj")
+# rm(df_sys)
+df_sys <- readRDS(file = "./dat/df_sys.obj")
+df_sys <- df_sys %>%
+  mutate(dt = str_sub(V1, 1, 23) %>%
+           ymd_hms())  %>%
+    dplyr::filter(!is.na(dt)) %>%
+  mutate(log = str_sub(V1, 25, -1)) %>%
+  # filter(log != "APPL_ID=2(PATH_NAME=ereqo)のバッチデーモンを開始しました") %>%
+  mutate(ses = str_sub(V1, 25, 25+11),
+         proc = str_sub(V1, 25+11+2, -1)) 
+# %>%
+  # dplyr::select(-V1) 
+
+
+ses_in_drcheck <- df_trs %>%
+  dplyr::filter(type == "参照" & view == "P112_患者データ参照") %>%
+  dplyr::filter(!str_detect(usr, "Adminihc")) %>%
+  dplyr::filter(!str_detect(usr, "Adminpre")) %>%
+  .[["reqID"]]
+
+# ses_in_drcheck
+
+df_bat_drchck <- df_sys %>%
+  dplyr::filter(ses %in% ses_in_drcheck)  %>%
+  dplyr::filter(str_detect(proc, "【PARAMS】\\[id=[0-9]*\\]")) %>%
+  dplyr::mutate(tag_pt = str_extract(proc, "【PARAMS】\\[id=[0-9]*\\]")) %>%
+  mutate(ID = tag_pt %>%
+           str_remove("【PARAMS】\\[id=") %>%
+           str_remove("\\]") %>%
+           as.numeric())  %>%
+dplyr::left_join(df_pair, by="ID") %>%
+dplyr::filter(!is.na(LOGIN_ID)) %>%
+dplyr::rename(ePROID = LOGIN_ID, reqID = ses) 
+# %>%
+#   dplyr::select(ePROID, reqID)
+
+df_dr <- df_trs %>%
+  dplyr::filter(type == "参照" & view == "P112_患者データ参照") %>%
+  dplyr::filter(!str_detect(usr, "Adminihc")) %>%
+  dplyr::filter(!str_detect(usr, "Adminpre")) %>%
+  dplyr::left_join(df_bat_drchck, by="reqID") %>%
+  dplyr::filter(!is.na(dt)) %>%
+  dplyr::select(dt_act, usr, ePROID) %>%
+  mutate(proc_cat = "HCP") %>%
+  dplyr::left_join(df_case, by = "ePROID") %>%
+  mutate(dt_act = lubridate::ymd_hms(dt_act)) %>%
+  mutate(alart_dt_from_start = dt_act - dttime) %>%
+  mutate(alart_dt_from_start_num = alart_dt_from_start %>%
+           as.numeric("days")) %>%
+  mutate(group_proc = "HCP") %>%
+  mutate(group_proc = factor(group_proc, levels = lvlinc, ordered = T)) %>%
+  dplyr::arrange(group_proc) %>%
+  mutate(group_proc_n = group_proc %>%
+           as.numeric()) %>%
+  dplyr::left_join(dt3_smr, by="ePROID")
+
+```
+
+
+
+```{r}
+
+
+df_case_p <- df_case %>%
+  dplyr::left_join(dt3_smr, by= "ePROID")
+```
+
+```{r}
+f_vis <- "../dat/list_of_visit_v2.xlsx"
+df_visadm <- read.xlsx(f_vis) %>%
+  mutate(date_start = lubridate::as_date(date_start, origin = "1899-12-30"),
+         date_end = lubridate::as_date(date_end, origin = "1899-12-30"))  %>%
+  mutate(event = ifelse(str_detect(memo, "dead"), 1, 0)) %>%
+  mutate(event_f = ifelse(str_detect(memo, "dead"), "dead", "censored")) %>%
+  mutate(time = memo %>%
+           str_replace_all(., pattern = "／", "/") %>%
+           str_extract("[0-9]*\\/[0-9]*\\/[0-9]*") %>%
+           lubridate::ymd())
+
+# df_visadm %>%
+#   colnames()
+
+f_vis_c <- "../dat/ePRO_ChibaCC/ePRO_ChibaCC.xlsx"
+
+df_visadm_c <- read.xlsx(f_vis_c, colNames = F) %>%
+  as.matrix() %>%
+  t() %>%
+  as.data.frame() %>%
+  `colnames<-`(.[1,]) %>%
+  dplyr::filter(来院日 != "来院日") %>%
+  mutate(date_start = lubridate::as_date(as.numeric(来院日), origin = "1899-12-30")) %>%
+  mutate(memo = "",
+         PT_ID = "12011068402173664",
+         vis_or_adm_or_fl = "vis",
+         date_end = NA,
+         cat_scheduled = "scheduled",
+         cat_kuhp_others = "ccc"
+         )
+
+df_visadm_all <- bind_rows(df_visadm, df_visadm_c)
+
+
+df_visadm_all <- df_visadm_all %>%
+  rename(pt_id = PT_ID) %>%
+  dplyr::left_join(df_case, by="pt_id") %>%
+  dplyr::filter(!is.na(ePROID)) %>%
+  mutate(date_start = date_start -dt ,
+         date_end = date_end - dt,
+         time = time - dt) %>%
+  dplyr::left_join(dt3_smr, by="ePROID") %>%
+  mutate(group_proc = "FL" %>%
+           factor(., levels = lvlinc)) %>%
+  mutate(group_proc_n = as.numeric(group_proc) )
+  
+
+df_vis <- df_visadm_all %>%
+  dplyr::filter(vis_or_adm_or_fl== "vis")
+
+df_adm <- df_visadm_all %>%
+  dplyr::filter(vis_or_adm_or_fl== "adm")
+
+df_fl <-  df_visadm_all %>%
+  dplyr::filter(!is.na(event))
+# df_case %>%
+#   dplyr::filter(施設名称 == "福井大学医学部附属病院") %>%
+#   .[["pt_id"]]
+
+```
+
+
+```{r}
+p_inalt <- ggplot() +theme_pubr(legend = "right")+
+  geom_vline(xintercept = 5, color="black") +
+  geom_hline(yintercept = 5, color="black") +
+  geom_point(data = dt3_smr,
+             aes(x=alart_per_w ,y=input_per_w, color = pt_class_f))+
+  scale_x_continuous(limits = c(0, 18), expand = c(0, 0))+
+  scale_y_continuous(limits = c(-1, 15), expand = c(0, 0))
+p_inalt
+ggsave2_tri(p_inalt, wid = 12, hei = 9)
+```
+
+
+
+```{r}
+# devtools::install_github("teunbrand/ggh4") 
+# devtools::install_github("teunbrand/ggh4x")
+require(ggh4x)
+xsub <- 0.3
+p_alart_inp <- ggplot() +theme_pubr(legend = "right")+
+  #   geom_point(
+  #   data = df_bat_qsub,
+  #   aes(x=group_proc_n, y=alart_dt_from_start_num), color="blue",size=0.8
+  # )+
+  #   geom_point(
+  #   data=dt_fam,
+  #   aes(x=group_proc_n,y=alart_dt_from_start_num),
+  #   color="red", size= 0.5
+  # )+
+  geom_point(
+    data=dt3,
+    aes(x=group_proc_n,y=alart_dt_from_start_num),
+    color="black", size= 0.5
+  )+
+  scale_y_continuous(breaks = seq(0,max_study_date,28), limits = c(0, max_study_date+1), expand = c(0, 0))+
+  scale_x_continuous(breaks = c(1,2,3,4,5,6), labels =lvlinc , expand = c(0.1,0.1))+
+  coord_flip()+
+  facet_nested(~ePROID +pt_class_f )  
+  # facet_grid() +
+  # facet_wrap(~ pt_class_f+ePROID, ncol=2, scales = "free")
+p_alart_inp
+
+max_date <- max_study_date
+# max_date <- max_inputdate
+
+p_alart_inp <- ggplot() +theme_pubr(legend = "right")+
+    geom_point(
+    data = df_bat_qsub,
+    aes(x=alart_dt_from_start_num, y=group_proc_n), color="blue",size=1
+  )+
+  # geom_point(
+  #   data=dt_fam,
+  #   aes(y=group_proc_n,x=alart_dt_from_start_num),
+  #   color="black", size= 0.5
+  # )+
+  # geom_point(
+  #   data=dt3,
+  #   aes(x=alart_dt_from_start_num,y=group_proc_n),
+  #   color="red", size= 0.75
+  # )+
+  geom_vline(data=df_case_p,
+             aes(xintercept = span_in_study))+
+  scale_x_continuous(breaks = seq(0,max_date,28), limits = c(0, max_date+1), expand = c(0, 0))+
+  scale_y_continuous(breaks = c(1,2,3,4, 5, 6), labels =lvlinc , expand = c(0.1,0.1))+
+   facet_nested_wrap(
+    vars(pt_class_f, ePROID), dir = "v", strip.position = "left",
+    axes = "all", remove_labels = "x",scale="free_y",
+    ncol = 3
+  )
+# df_case_p$span_in_study
+# 
+p_alart_inp
+
+ggsave2_tri(p_alart_inp, wid = 60, hei = 35)
+
+# +
+#   geom_point(
+#     data=df_case, 
+#     aes(x=ePROID,y=span _in_study),
+#     color="black"
+#   )+
+#   geom_point(
+#     data=dt3, 
+#     aes(x=ePROID,y=alart_dt_from_start_num),
+#     color="black", size= 0.8
+#   )+
+
+
+# p_alart_inp
+
+# ggsave2_tri(p_alart_inp, wid = 60, hei = 26)
+```
+
+
+```{r}
+# df_vis_slim <- df_vis %>%
+#   dplyr::select(pt_class_f, ePROID, date_start, cat_scheduled)
+
+xdiv <- 0.15
+
+
+df_alart_input <- bind_rows(dt3, df_bat_qsub) %>%
+  mutate(colorfac = case_when(
+    #log がNAならinput
+    	is.na(log) ~ "input",
+    	T ~ "alart"
+  )) %>%
+  mutate(group_proc_n = case_when(
+    colorfac == "alart" ~ group_proc_n + xdiv,
+    colorfac == "input" ~ group_proc_n - xdiv,
+  ))
+```
+
+
+
+```{r}
+require(ggnewscale)
+max_date <- max_study_date
+
+design <- matrix(1:18, 3, 6, byrow = TRUE) %>%
+  t()
+design[,3] <- 12:17
+design[6,2] <- NA
+design
+
+
+# max_date <- max_inputdate
+
+lvlinc
+p_flp <-  ggplot() +theme_pubr(legend = "right")+
+  #Visit
+  geom_point(data = df_vis,
+             aes(x = date_start, y= 6,color =cat_scheduled))+
+  #Adm
+  geom_segment(data = df_adm,
+             aes(x = date_start, xend = date_end, y= 6, yend=6, color =cat_scheduled))+
+  scale_color_brewer(palette = "Set1")+
+  ggnewscale::new_scale(new_aes = "color")+
+  #HCP
+  geom_point(data=df_dr,
+             aes(x= alart_dt_from_start_num, y= 5), color ="salmon")+
+  scale_color_discrete()+
+  # labs(color="Vis/Adm type")+
+  ggnewscale::new_scale(new_aes = "color")+
+  # #Follow
+  # geom_vline(data = df_fl,
+  #            aes(xintercept = time, color=event_f))+
+  geom_point(
+    data = df_alart_input,
+    aes(x=alart_dt_from_start_num, y=group_proc_n , color=colorfac) 
+  )+
+  labs(color="Alart/Input")+
+  # #Alart
+  # geom_point(
+  #   data = df_bat_qsub,
+  #   aes(x=alart_dt_from_start_num, y=group_proc_n + xdiv), color="blue"
+  # )+
+  #Family
+  geom_point(
+    data=dt_fam,
+    aes(y=group_proc_n,x=alart_dt_from_start_num),
+    color="black"
+  )+
+  # #Input
+  # geom_point(
+  #   data=dt3,
+  #   aes(x=alart_dt_from_start_num,y=group_proc_n- xdiv),
+  #   color="red"
+  # )+
+  scale_color_brewer(palette = "Dark2")+
+  geom_vline(data=df_case_p,
+             aes(xintercept = span_in_study))+
+  scale_x_continuous(breaks = seq(0,max_date,28), limits = c(-1, max_date+1), expand = c(0, 0))+
+  scale_y_continuous(breaks = c(1,2,3,4,5,6), labels =lvlinc , expand = c(0.1,0.1))+
+  facet_manual(vars(pt_class_f, ePROID), design = design,strip.position = "left",
+               axes = "all", remove_labels = "x",scale="free_y",)
+  
+# +
+#    facet_nested_wrap(
+#     vars(pt_class_f, ePROID), dir = "v", strip.position = "left",
+#     axes = "all", remove_labels = "x",scale="free_y",
+#     nrow = 6,
+#   ) 
+  # max_date
+p_flp
+
+ggsave2_tri(p_flp, wid = 60, hei = 26)
+```
+
+
+```{r}
+require(extrafont)
+# font_import()
+loadfonts(quiet = T)
+
+df_ft <- tibble(extrafont::fonttable())
+# extrafont::fonts()
+lvlinc_sub <- lvlinc %>% 
+  .[1:5]
+lvlinc_sub
+
+lvlinc_sub[1] <- "Family"
+lvlinc_sub[2] <- "item 29,30"
+lvlinc_sub[3] <- "item 1-28"
+get_pts_ids <- function(df){
+  df %>% 
+    .[["ePROID"]] %>%
+    str_replace("C00000", "") %>% 
+    as.numeric() %>% 
+    # magrittr::subtract(., 27) %>% 
+    as.character() %>% 
+    str_c("Pt.", ., sep="") %>% 
+    return()
+  }
+
+get_pts_class <- function(df){
+  df %>% .[["pt_class_f"]] %>% 
+    as.character() %>% 
+    str_replace("_", " ") %>% 
+    str_to_title() %>% 
+    factor(., levels=c( "Low Responder", "Heavy User", "Light User")) %>% 
+    return()
+}
+
+
+ridiculous_strips <- strip_themed(
+     # Horizontal strips
+     # Vertical strips
+     background_y = elem_list_rect(
+       fill = c(rep("gold", 6), rep("tomato", 5), rep("deepskyblue", 4))
+     ),
+     # text_y = elem_list_text(angle = c(0, 90)),
+     by_layer_y = FALSE
+)
+
+# df_dr %>% get_pts_class()
+
+df_dr <- df_dr %>% 
+  mutate(pts_ids = get_pts_ids(.)) %>% 
+  mutate(class_f = get_pts_class(.))
+
+df_alart_input <- df_alart_input %>% 
+  mutate(pts_ids = get_pts_ids(.)) %>% 
+  mutate(class_f = get_pts_class(.))
+
+dt_fam <- dt_fam %>% 
+  mutate(pts_ids = get_pts_ids(.)) %>% 
+  mutate(class_f = get_pts_class(.))
+
+df_case_p <- df_case_p %>% 
+  mutate(pts_ids = get_pts_ids(.)) %>% 
+  mutate(class_f = get_pts_class(.))
+# "Times New Roman"
+p_flp_sub <-  ggplot() +theme_pubr(legend = "right")+
+  # theme(text = element_text(family = "Times New Roman"))+
+  theme(text = element_text(family = "Times"))+
+  #Visit
+  # geom_point(data = df_vis,
+  #            aes(x = date_start, y= 6,color =cat_scheduled))+
+  #Adm
+  # geom_segment(data = df_adm,
+  #            aes(x = date_start, xend = date_end, y= 6, yend=6, color =cat_scheduled))+
+  # scale_color_brewer(palette = "Set1")+
+  ggnewscale::new_scale(new_aes = "color")+
+  #HCP
+  geom_point(data=df_dr,
+             aes(x= alart_dt_from_start_num, y= 5), color ="salmon")+
+  scale_color_discrete()+
+  # labs(color="Vis/Adm type")+
+  ggnewscale::new_scale(new_aes = "color")+
+  # #Follow
+  # geom_vline(data = df_fl,
+  #            aes(xintercept = time, color=event_f))+
+  geom_point(
+    data = df_alart_input,
+    aes(x=alart_dt_from_start_num, y=group_proc_n , color=colorfac) 
+  )+
+  labs(color="Alart/Input")+ylab("")+xlab("")+
+  # #Alart
+  # geom_point(
+  #   data = df_bat_qsub,
+  #   aes(x=alart_dt_from_start_num, y=group_proc_n + xdiv), color="blue"
+  # )+
+  #Family
+  geom_point(
+    data=dt_fam,
+    aes(y=group_proc_n,x=alart_dt_from_start_num),
+    color="black"
+  )+
+  # #Input
+  # geom_point(
+  #   data=dt3,
+  #   aes(x=alart_dt_from_start_num,y=group_proc_n- xdiv),
+  #   color="red"
+  # )+
+  scale_color_brewer(palette = "Dark2")+
+  geom_vline(data=df_case_p,
+             aes(xintercept = span_in_study))+
+  scale_x_continuous(breaks = seq(0,max_date,28), limits = c(-1, max_date+1), expand = c(0, 0))+
+  scale_y_continuous(breaks = c(1,2,3,4,5), labels =lvlinc_sub , expand = c(0.1,0.1))+
+  facet_manual(vars(class_f, pts_ids), design = design,strip.position = "left",
+               axes = "all", remove_labels = "x",scale="free_y",strip = ridiculous_strips)
+  
+# +
+#    facet_nested_wrap(
+#     vars(pt_class_f, ePROID), dir = "v", strip.position = "left",
+#     axes = "all", remove_labels = "x",scale="free_y",
+#     nrow = 6,
+#   ) 
+  # max_date
+p_flp_sub
+
+ggsave2_tri(p_flp_sub, wid = 60, hei = 26)
+```
+
+
+```{r}
+p_alart_inp2 <- ggplot() +theme_pubr(legend = "right")+
+  geom_point(
+    data=dt3, 
+    aes(x=ePROID,y=alart_dt_from_start_num,color=ePROID),
+  )+
+  geom_point(
+    data = df_bat_qsub,
+    aes(x=ePROID, y=alart_dt_from_start_num),
+    color="black", size= 0.8
+  )+
+  geom_point(
+    data=df_case, 
+    aes(x=ePROID,y=span_in_study),
+    color="black",size=2
+  )+
+  scale_y_continuous(breaks = seq(0,max_inputdate,28), limits = c(0, max_inputdate+1), expand = c(0, 0))+
+  coord_flip()+
+  facet_grid()+
+  facet_wrap(~ group_proc, ncol=1)+
+  ylab("date_from_start")
+
+# p_alart_inp2
+# 
+# ggsave2_tri(p_alart_inp2, wid = 60, hei = 26)
+```
+
+
+```{r}
+p_alart_inp3 <- ggplot() +theme_pubr(legend = "right")+
+  geom_point(
+    data=dt3, 
+    aes(x=group_proc,y=alart_dt_from_start_num,color=ePROID),
+  )+
+  geom_point(
+    data = df_bat_qsub,
+    aes(x=group_proc, y=alart_dt_from_start_num),
+    color="black", size= 0.8
+  )+
+  geom_hline(data = df_case,
+             aes(yintercept = span_in_study))+
+  # geom_point(
+  #   data=df_case, 
+  #   aes(x=group_proc,y=span_in_study),
+  #   color="black",size=2
+  # )+
+  scale_y_continuous(breaks = seq(0,max_inputdate,28), limits = c(0, max_inputdate+1), expand = c(0, 0))+
+  coord_flip()+
+  facet_grid()+
+  facet_wrap(~ ePROID, ncol=1)+
+  ylab("date_from_start")
+
+# p_alart_inp3
+# 
+# ggsave2_tri(p_alart_inp3, wid = 60, hei = 50)
+
+```
+
+
+```{r}
+d_trs <- "../dat/eReQoデータ・ログ_20220801/操作ログ/"
+
+
+fs_trs <-  list.files(d_trs, recursive = T, full.names = T)
+
+# f <- "../dat/eReQoデータ・ログ_20220801/操作ログ/(20210527_102708)_(20210527_175931)trace.csv"
+# df_f <- fread(f,header = T, sep = ",", encoding = "UTF-8",colClasses = 'character') %>%
+#     as.data.frame() 
+df_trs <- data.frame()
+for(f in fs_trs){
+  # 重いので一旦出力保存
+  # print(f)
+  # df_f <- fread(f,header = F, sep = ",", encoding = "UTF-8",colClasses = 'character') %>%
+  #   as.data.frame() %>%
+  #   mutate(ind_in_f = 1:nrow(.)) 
+  # df_trs <- bind_rows(df_trs, df_f)
+
+}
+
+# saveRDS(object = df_trs, "./dat/df_trs.obj")
+# rm(df_trs)
+df_trs <- readRDS( "./dat/df_trs.obj")
+
+# warnings()
+
+
+df_trs <- df_trs %>%
+  `colnames<-`(c("dt_act", "usr","type","view","action","keydate","reqID","sesID","ind_in_f"))%>%
+  dplyr::filter(dt_act != "日時")
+
+df_fam <- df_trs %>%
+  dplyr::filter(str_detect(usr, " ")) %>%
+  mutate(ePROID = str_extract(usr, "^C[0-9]*")) %>%
+  dplyr::filter(ePROID %in% df_case$ePROID) %>%
+  dplyr::left_join(df_case, by="ePROID") %>%
+  mutate(dt_act = lubridate::ymd_hms(dt_act) %>%
+           lubridate::date()) %>%
+  mutate(dt_from_start = dt_act - dt)
+```
+
+
+```{r}
+p_fam <- ggplot() +theme_pubr(legend = "right")+
+  geom_point(
+    data=dt3, 
+    aes(x=ePROID,y=alart_dt_from_start_num,color=ePROID),
+  )+
+  geom_point(
+    data = df_fam,
+    aes(x=ePROID, y=dt_from_start),
+    color="black", size= 0.8
+  )+
+  geom_point(
+    data=df_case, 
+    aes(x=ePROID,y=span_in_study),
+    color="black",size=2
+  )+
+  scale_y_continuous(breaks = seq(0,max_inputdate,28), limits = c(0, max_inputdate+1), expand = c(0, 0))+
+  coord_flip()+
+  facet_grid()+
+  facet_wrap(~ group_proc, ncol=1)+
+  ylab("date_from_start")
+
+# p_fam
+# 
+# ggsave2_tri(p_fam, wid = 60, hei = 26)
+# 
+# df_fam$usr %>%
+#   unique()
+
+
+```
+
+
+
+
+```{r}
+
+fs_ptman <- list.files(d_ptman, recursive = T, full.names = T)
+
+df_ptman <- data.frame()
+
+for(f in fs_ptman){
+  # print(f)
+  df_f <- fread(f,header = F, sep = ",", encoding = "UTF-8") %>%
+    mutate(V2 = as.character(V2)) %>%
+    `colnames<-`(c("dt", "usr", "atype", "aview", "aact", "akye", "reqid", "sesid")) %>%
+    dplyr::filter(dt != "日時") %>%
+    mutate(dt = ymd_hms(dt)) 
+  # %>%
+  #   dplyr::filter(dt_study_start <= dt)
+  #   
+  df_ptman <- bind_rows(df_ptman, df_f)
+}
+
+# colnames(df_ptman) <- c("dt", "usr", "atype", "aview", "aact", "akye", "reqid", "sesid")
+  # df_ptman[1,]
+  
+# 
+# df_ptman <- df_ptman %>%
+#   dplyr::filter(dt != "日時") %>%
+#   mutate(dt = ymd_hms(dt))
+
+# colnames(df_ptman)
+```
+
+
+```{r}
+# df_ptman %>%
+#   group_by(usr) %>%
+#   summarise(n=n()) %>%
+#   dplyr::arrange(-n) %>%
+#   DT::datatable()
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+##function for save attached pkgs from sessioninfo
+```{r}
+ses2ris <- function(dir="./ses_ris", ver=T){
+  require("magrittr")
+  require("stringr")
+ 
+  if(!file.exists(dir)){
+    dir.create(dir)
+  }
+ 
+  end_out <- function(pac, ver, dir){
+    pac_ver <- packageVersion(pac) %>% str_replace("\\-", "_")
+ 
+    if(ver){
+      out_file <- paste(pac, "_", pac_ver, ".ris",sep = "")
+    }else{
+      out_file <- paste(pac, ".ris",sep = "")
+    }
+    print(out_file)
+ 
+    ##pac_cit <- utils:::print.bibentry(citation(pac), style = "Bibtex")
+    pac_cit <- print(citation(pac),bibtex=TRUE)
+ 
+    double_q <- "\""
+    if(!is.na(pac_cit[1]$title)){
+      pac_cit[1]$title <- str_replace(pac_cit[1]$title, "---", ":")
+      pac_cit[1]$title <- str_replace_all(pac_cit[1]$title, "\\'", double_q)
+    }
+    
+    bib_pac_cit <- toBibtex(pac_cit) %>% 
+      as.character() %>%
+      str_c(collapse="\n") %>% 
+      str_replace("\\{,", 
+                  paste("{",pac,",", collapse = "", sep=""))
+    
+    write(bib_pac_cit, "tmp.bib")
+    # capture.output(bib_pac_cit,file = "tmp.bib")
+   
+    sys_code <- paste("bib2xml tmp.bib | xml2ris  > ", dir, "/", out_file, sep="")
+    print(sys_code)
+    system(sys_code)
+  }
+ 
+  pacs <- sessionInfo() %>%
+    .$otherPkgs %>%
+    names(.)
+  print(pacs)
+  sapply(X = pacs, FUN = end_out, ver=ver, dir=dir)
+ 
+  # file.remove("./tmp.bib")
+}
+
+ses2ris()
+```
+
+```{r}
+pc <- print(citation("openxlsx"), bibtex=T)
+toBibtex(pc) 
+```
+
+
+
+```{r}
+getBib <- function(pkg="base"){
+
+  cit <- citation(pkg)
+  # print(cit)
+  bib <- toBibtex(cit)
+  print(bib)
+  return(bib)
+}
+
+
+make_ses_lists <- function(){
+  d <- "./ses"
+  pack_vars <- c()
+  if(!dir.exists(d)){
+    dir.create(d)
+  }else{
+    print("dir ses is existing!")
+  }
+  
+  ses_lis <- sessionInfo()
+  pkgs <- ses_lis$otherPkgs
+  pkgs_nams <- names(pkgs)
+  
+  
+  for(i in 1:length(pkgs)){
+    pkg_i <- pkgs[[i]]
+    pkg_ni <- pkgs_nams[[i]]
+    # print(pks_i)
+    pkg_vi <- pkg_i$Version
+    
+    file_tag <- paste(pkg_ni, pkg_vi, sep = "_")
+    path_tag <- paste(d, "/",file_tag, ".bib", sep="")
+    
+    print(pkg_vi)
+    print(pkg_ni)
+    print(path_tag)
+    
+    pack_vars <- c(pack_vars,
+                   paste(pkg_ni, pkg_vi, sep="_"))
+    
+    b <- getBib(pkg = pkg_ni)
+    write(b, path_tag)
+  }
+  return(pack_vars)
+}
+
+
+pv_txt <- make_ses_lists() %>%
+  str_c(., sep="\n")
+
+write(pv_txt,"./pv.txt")
+
+
+rst <- rstudioapi::versionInfo()
+print(rst)
+
+
+```

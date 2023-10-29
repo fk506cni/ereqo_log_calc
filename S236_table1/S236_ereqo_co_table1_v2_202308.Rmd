@@ -1,0 +1,355 @@
+---
+title: "S236_ereqo_co_table1_v2_202308"
+author: "fk506.cni"
+date: "2023-08-30"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+require(tidyverse)
+require(data.table)
+```
+
+```{r}
+f_ep_c <- "../dat/ePRO_ChibaCC/out_data_fix_221122/fixed_out_20221122_123720_009416/an_episode_fix_20221122_123720_009416.csv"
+f_ep_k <- "../dat/out_data_fix_202208/fixed_out_20220816_040218_226218/an_episode_fix_20220816_040218_226218.csv"
+# f_ep_f <- "../dat/out_data_fix_221118_fukui/fixed_out_20221221_145839_994431/an_episode_fix_20221221_145839_994431.csv"
+f_ep_f <- "../dat/out_data_fix_230201_fukui/fixed_out_20230201_141553_120889/an_episode_fix_20230201_141553_120889.csv"
+```
+
+```{r}
+# df_c <- fread(f_ep_c)
+# df_k <- fread(f_ep_k)
+# df_f <- fread(f_ep_f)
+fs <- c(f_ep_c, f_ep_k, f_ep_f)
+
+# df_c %>%
+#   colnames()
+# df_k %>%
+#   colnames()
+df <- data.frame()
+for(f in fs){
+  print(f)
+  df_f <- readr::read_csv(file = f, locale = locale(encoding = "shift-jis"), col_types = rep("c", 62) %>% str_c(sep = "", collapse = "")) %>% 
+    # fread(f, stringsAsFactors = F, colClasses = rep("character", 62)) %>%
+    mutate(file = f) 
+  # %>% 
+  #   mutate(COID = as.character(COID))
+  df <- bind_rows(df, df_f)
+}
+
+
+```
+
+```{r}
+s_c <-  "../dat/ePRO_ChibaCC/out_data_fix_221122/fixed_out_20221122_123720_009416/co_patient_background_fix_20221122_123720_009416.csv"
+s_k <-  "../dat/out_data_fix_202208/fixed_out_20220816_040218_226218/co_patient_background_fix_20220816_040218_226218.csv"
+s_f <- "../dat/out_data_fix_230201_fukui/fixed_out_20230201_141553_120889/co_patient_background_fix_20230201_141553_120889.csv"
+df_b <- data.frame()
+fs2 <- c(s_c, s_k, s_f)
+for(f in fs2){
+  print(f)
+  df_f <- readr::read_csv(file = f, locale = locale(encoding = "shift-jis"), col_types = rep("c", 35) %>% str_c(sep = "", collapse = "")) %>% 
+    # fread(f, stringsAsFactors = F, colClasses = rep("character", 35)) %>%
+    
+    mutate(file = f)
+  df_b <- bind_rows(df_b, df_f)
+}
+
+
+```
+
+```{r}
+t_c  <-  "../dat/ePRO_ChibaCC/out_data_fix_221122/fixed_out_20221122_123720_009416/an_therapeutic_medicine_fix_20221122_123720_009416.csv"
+t_k <-  "../dat/out_data_fix_202208/fixed_out_20220816_040218_226218/an_therapeutic_medicine_fix_20220816_040218_226218.csv"
+t_f <- "../dat/out_data_fix_230201_fukui/fixed_out_20230201_141553_120889/an_therapeutic_medicine_fix_20230201_141553_120889.csv"
+df_t <- data.frame()
+fs3 <- c(t_c, t_k,t_f)
+for(f in fs3){
+  print(f)
+  df_f <- readr::read_csv(file = f, locale = locale(encoding = "shift-jis"), col_types = rep("c", 33) %>% str_c(sep = "", collapse = "")) %>% 
+    # fread(f, stringsAsFactors = F, colClasses = rep("character", 33)) %>%
+    mutate(file = f)
+  df_t <- bind_rows(df_t, df_f)
+}
+
+```
+
+77 days 12:09:30
+```{r}
+chr2dur <- function(s){
+  dd <- s %>% 
+          str_extract("^[0-9]*") %>%
+           as.numeric() %>%
+           ddays() %>%
+           as.period()
+  hhms <- s %>%  
+          str_extract( "[0-9]*:[0-9]*:[0-9]*$") %>%
+          if_else(is.na(.), "00:00:00", .) %>% 
+           hms()
+  
+  dur <- dd + hhms
+  return(dur)
+}
+
+
+
+ss <- c(
+  "77 days 12:09:30",
+  "77 days 12:29:30",
+  "126 days 12:09:30",
+  "77 days"
+)
+# 
+# ss %>%  
+#           str_extract( "[0-9]*:[0-9]*:[0-9]*$")  %>%
+#           if_else(is.na(.), "00:00:00", .) %>% 
+#            hms()
+# 
+
+chr2dur(s=ss)
+```
+
+
+
+```{r}
+df_t2 <- df_t %>% 
+  left_join(df, by="ep_id") %>% 
+  rename(tx_line = 治療ライン) %>% 
+  mutate(dt_diag2submit2 = chr2dur(dt_diag2submit),
+         dt_diag2txstart2 = chr2dur(dt_diag2txstart)) %>% 
+  mutate(dt_submit2start = -dt_diag2submit2 + dt_diag2txstart2) %>% 
+  mutate(dt_submit2start_num = as.numeric(dt_submit2start, "days")) %>% 
+  dplyr::select(dt_diag2submit, dt_diag2txstart,dt_diag2submit2, dt_diag2txstart2,dt_diag2txend,ePROID, tx_line, dt_submit2start,everything()) 
+df_t2 %>% colnames()
+
+```
+
+```{r}
+require(ggpubr)
+p_tx <- ggplot()+theme_pubr()+
+  geom_point(data = df_t2, 
+             aes(x= ePROID, y=dt_submit2start_num, color=tx_line))+
+  coord_flip()
+
+# p_tx
+
+
+p_tx2 <- ggplot()+theme_pubr()+
+  geom_point(data = df_t2, 
+             aes(x= ePROID, y=dt_submit2start_num, color=tx_line))+
+  coord_flip(ylim = c(-100, 400))
+
+# p_tx2
+```
+
+
+
+```{r}
+# install.packages("table1")
+require(table1)
+# require(tableone)
+require(lubridate)
+```
+4584 days 12:41:14
+みたいな書式
+
+```{r}
+df <- df %>%
+  mutate(dt_diag2submit_d = str_extract(dt_diag2submit, "^[0-9]*") %>%
+           as.numeric() %>%
+           ddays() %>%
+           as.period(),
+         dt_diag2submit_hms = str_extract(dt_diag2submit, "[0-9]*:[0-9]*:[0-9]*$") %>%
+           hms(),
+         age_diag_p = age_diag %>%
+           as.numeric() %>%
+           dyears() %>%
+           as.period()) %>%
+  mutate(dt_diag2submit_dif = dt_diag2submit_d + dt_diag2submit_hms) %>%
+  mutate(age_at_submit = age_diag_p + dt_diag2submit_dif) %>%
+  mutate(age_at_submit_num = as.numeric(age_at_submit, "year")) %>%
+  select(age_at_submit_num,
+         age_at_submit,
+         dt_diag2submit_dif,
+         dt_diag2submit_d,
+         dt_diag2submit_hms,
+         dt_diag2submit,
+         age_diag_p,
+         age_diag,
+         everything()) %>%
+  mutate(institute = case_when(
+    str_detect(file, "Chiba") ~ "CCC",
+    str_detect(file, "fukui") ~ "FM",
+    T ~ "KUHP"
+  ))
+# df$dt_diag2submit_d
+```
+
+```{r}
+require(openxlsx)
+
+df_mg <- merge(df, df_b, by = "ep_id")
+
+label(df_mg$age_at_submit_num) <- "登録時年齢"
+label(df_mg$institute) <- "施設"
+label(df_mg$診断時ps) <- "PS"
+
+
+
+tb <- table1(~ age_at_submit_num + 性別 + がん種大分類 +institute + 診断時ps, data=df_mg)
+tb %>%
+  write.xlsx(., file = "./table1.xlsx", overwrite = T)
+
+tb %>% 
+  as.data.frame() %>% 
+  DT::datatable()
+```
+
+
+
+```{r}
+f_dt3_smr <- "../S235_ereqo_vis_v5_202308/dat/dt3_smr.rds"
+
+df_res <- readRDS(f_dt3_smr) %>% 
+  left_join(df_mg, by="ePROID")
+
+tb2 <- table1(~ age_at_submit_num + 性別 + がん種大分類 +institute + 診断時ps|pt_class, data=df_res)
+
+
+tb2 %>% 
+  write.xlsx(., file = "./table2.xlsx", overwrite = T)
+```
+
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+##function for save attached pkgs from sessioninfo
+```{r}
+ses2ris <- function(dir="./ses_ris", ver=T){
+  require("magrittr")
+  require("stringr")
+ 
+  if(!file.exists(dir)){
+    dir.create(dir)
+  }
+ 
+  end_out <- function(pac, ver, dir){
+    pac_ver <- packageVersion(pac) %>% str_replace("\\-", "_")
+ 
+    if(ver){
+      out_file <- paste(pac, "_", pac_ver, ".ris",sep = "")
+    }else{
+      out_file <- paste(pac, ".ris",sep = "")
+    }
+    print(out_file)
+ 
+    ##pac_cit <- utils:::print.bibentry(citation(pac), style = "Bibtex")
+    pac_cit <- print(citation(pac),bibtex=TRUE)
+ 
+    double_q <- "\""
+    if(!is.na(pac_cit[1]$title)){
+      pac_cit[1]$title <- str_replace(pac_cit[1]$title, "---", ":")
+      pac_cit[1]$title <- str_replace_all(pac_cit[1]$title, "\\'", double_q)
+    }
+    
+    bib_pac_cit <- toBibtex(pac_cit) %>% 
+      as.character() %>%
+      str_c(collapse="\n") %>% 
+      str_replace("\\{,", 
+                  paste("{",pac,",", collapse = "", sep=""))
+    
+    write(bib_pac_cit, "tmp.bib")
+    # capture.output(bib_pac_cit,file = "tmp.bib")
+   
+    sys_code <- paste("bib2xml tmp.bib | xml2ris  > ", dir, "/", out_file, sep="")
+    print(sys_code)
+    system(sys_code)
+  }
+ 
+  pacs <- sessionInfo() %>%
+    .$otherPkgs %>%
+    names(.)
+  print(pacs)
+  sapply(X = pacs, FUN = end_out, ver=ver, dir=dir)
+ 
+  # file.remove("./tmp.bib")
+}
+
+ses2ris()
+```
+
+```{r}
+pc <- print(citation("openxlsx"), bibtex=T)
+toBibtex(pc) 
+```
+
+
+
+```{r}
+getBib <- function(pkg="base"){
+
+  cit <- citation(pkg)
+  # print(cit)
+  bib <- toBibtex(cit)
+  print(bib)
+  return(bib)
+}
+
+
+make_ses_lists <- function(){
+  d <- "./ses"
+  pack_vars <- c()
+  if(!dir.exists(d)){
+    dir.create(d)
+  }else{
+    print("dir ses is existing!")
+  }
+  
+  ses_lis <- sessionInfo()
+  pkgs <- ses_lis$otherPkgs
+  pkgs_nams <- names(pkgs)
+  
+  
+  for(i in 1:length(pkgs)){
+    pkg_i <- pkgs[[i]]
+    pkg_ni <- pkgs_nams[[i]]
+    # print(pks_i)
+    pkg_vi <- pkg_i$Version
+    
+    file_tag <- paste(pkg_ni, pkg_vi, sep = "_")
+    path_tag <- paste(d, "/",file_tag, ".bib", sep="")
+    
+    print(pkg_vi)
+    print(pkg_ni)
+    print(path_tag)
+    
+    pack_vars <- c(pack_vars,
+                   paste(pkg_ni, pkg_vi, sep="_"))
+    
+    b <- getBib(pkg = pkg_ni)
+    write(b, path_tag)
+  }
+  return(pack_vars)
+}
+
+
+pv_txt <- make_ses_lists() %>%
+  str_c(., sep="\n")
+
+write(pv_txt,"./pv.txt")
+
+
+rst <- rstudioapi::versionInfo()
+print(rst)
+
+
+```
